@@ -1,0 +1,26 @@
+FB CUSTOM — SITIO CON IMÁGENES SEPARADAS
+========================================
+
+Sube TODO el contenido de esta carpeta al servidor, respetando la estructura:
+
+  index.html
+  img/
+    vasos/                 foto de tarjeta de cada vaso, una por SKU (112-01.webp …)
+    vasos-limpias/         la misma foto sin "TU LOGO AQUÍ" (la usa el diseñador)
+    productos/             gorras y playeras, por modelo y color
+    productos-limpias/     gorras y playeras sin "TU LOGO AQUÍ" (diseñador)
+    sitio/                 carrusel de inicio y portadas
+
+- index.html e img/ deben quedar en la misma carpeta del servidor.
+- Abrir index.html con doble clic desde la computadora muestra la página,
+  pero la vista previa del diseñador solo funciona desde un servidor web.
+
+CAMBIAR LA FOTO DE UN VASO
+- Reemplaza img/vasos/<SKU>.webp (y img/vasos-limpias/<SKU>.webp) por la nueva,
+  con el mismo nombre. Recomendado: fondo transparente, 1000×1000 px, formato .webp.
+
+VASO NUEVO (SKU que no existía)
+- Opción A: pon la URL de la foto en la columna D (Imagen) del Sheet
+  y, si quieres, la foto limpia en la columna IMAGEN_LIMPIA.
+- Opción B: deja la columna D vacía y sube img/vasos/<SKU>.webp
+  e img/vasos-limpias/<SKU>.webp.
