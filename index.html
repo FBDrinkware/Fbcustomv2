@@ -633,7 +633,7 @@ footer .copy{display:flex;flex-direction:column;gap:4px;align-items:center}
   </div>
   <div class="hero-strip">
     <div class="wrap hero-tags">
-      <span><b>Mínimo de compra</b>25 piezas (diferentes colores o modelos)</span>
+      <span><b>Desde 25 piezas</b>grabado y envío gratis (combina colores o modelos)</span>
       <span><b>Entregas</b>Envíos a toda la República</span>
     </div>
   </div>
@@ -895,7 +895,7 @@ footer .copy{display:flex;flex-direction:column;gap:4px;align-items:center}
       <div class="row"><span>Artículos</span><b id="sumItems">0</b></div>
       <div class="row"><span>Piezas totales</span><b id="sumPcs">0</b></div>
       <div class="row" id="sumAmtRow" hidden><span>Subtotal estimado (IVA incl.)</span><b id="sumAmt">$0.00</b></div>
-      <small id="minNote">Mínimo de compra: 25 piezas por pedido. Puedes combinar colores y modelos.</small>
+      <small id="minNote">Grabado y envío gratis a partir de 25 piezas. Puedes combinar colores y modelos.</small>
       <small>El precio final depende de la técnica, el tamaño del logo y el volumen. Un asesor te enviará la cotización.</small>
       <a class="btn wa" id="waBtn" href="#" target="_blank" rel="noopener">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2c-1.5 0-3-.4-4.3-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8-.2-.1-.4-.1-.6.1l-.8 1c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.3-.4.2-.4.7-1.4.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5c-.2 0-.4.1-.6.3-.2.2-.8.8-.8 2s.8 2.3.9 2.5c.1.2 1.6 2.5 4 3.5 1.5.6 2 .7 2.8.6.5-.1 1.5-.6 1.7-1.2.2-.6.2-1.1.1-1.2l-.4-.2z"/></svg>
@@ -973,10 +973,13 @@ const FBX = {
   PZS_DEFAULT: 25,
   // Precio extra por pieza (con IVA). Se pueden cambiar en la hoja Guia:
   // PRECIO_LOGO_EXTRA · PRECIO_360 · PRECIO_DTF
-  TEC_PRECIO: { logoExtra: 15, '360': 50, dtf: 70 },
+  TEC_PRECIO: { logoExtra: 15, '360': 50, dtfUv: 70, dtfTextil: 0, bordado: 0 },
   precios: {}, nombres: {}, estatus: {}, preciosAsesor: {},
   promos: {},
   tec: {},    // tarjeta → técnica elegida (laser por defecto)
+  qty: {},    // tarjeta → piezas a añadir (25 por defecto)
+  talla: {},  // tarjeta → talla elegida (playeras / gorras)
+  modo: 'rapida', // 'rapida' (nombre y teléfono) | 'completo' (datos de facturación y entrega)
   logos: {},  // tarjeta → número de logos (láser)
   asesor: { codigo: 'FBDE-0', nombre: 'FB Drinkware', canal: 'FB Drinkware' },
   externo: false,
@@ -1015,7 +1018,7 @@ function fbxCelda(v) {
 const fbxNorm = s => (s || '').toString().trim().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const fbxMoney = n => '$' + Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fbxParam = k => new URLSearchParams(location.search).get(k);
-function fbxSku(p, color) { return p && p.sheet ? color : (p ? p.sku : ''); }
+function fbxSku(p, color, key) { return p && p.sheet ? color : p && p.apparel ? fbxSkuAparel(p, key || p.id, color) : (p ? p.sku : ''); }
 
 /* ---------- precios ---------- */
 function fbxPrecioBase(sku) {
@@ -1027,46 +1030,64 @@ function fbxPrecioBase(sku) {
   return Math.max(0, Math.round(f * 100) / 100);
 }
 /* Cargo por pieza de la técnica: láser 1 logo gratis, cada logo extra $15; 360° $50; DTF $70 */
-function fbxPrecioTec(tech, logos) {
-  if (tech === 'laser') return Math.max(0, (Number(logos) || 1) - 1) * FBX.TEC_PRECIO.logoExtra;
-  if (tech === '360') return FBX.TEC_PRECIO['360'];
-  if (tech === 'dtf') return FBX.TEC_PRECIO.dtf;
+const fbxEsTextil = cat => !!(cat && FBX_CODIGO_CATS.has(cat));   // playeras y gorras
+function fbxPrecioTec(tech, logos, cat) {
+  const P = FBX.TEC_PRECIO;
+  if (fbxEsTextil(cat)) return tech === 'dtf' ? P.dtfTextil : tech === 'bordado' ? P.bordado : 0;
+  if (tech === 'laser') return Math.max(0, (Number(logos) || 1) - 1) * P.logoExtra;
+  if (tech === '360') return P['360'];
+  if (tech === 'dtf') return P.dtfUv;
   return 0;
 }
 /* Nombre de la técnica como llega al panel (identifica la línea junto con el SKU) */
-function fbxTecNombre(tech, logos) {
-  if (tech === 'laser') return (Number(logos) || 1) > 1 ? `Grabado láser (${logos} logos)` : 'Grabado láser';
-  if (tech === '360') return 'Grabado 360°';
-  if (tech === 'dtf') return 'DTF';
+/* Nombres iguales a los del panel: Láser, 360°, DTF UV (vasos), DTF Textil y Bordado (playeras/gorras) */
+function fbxTecNombre(tech, logos, cat) {
+  if (tech === 'laser') return (Number(logos) || 1) > 1 ? `Láser (${logos} logos)` : 'Láser';
+  if (tech === '360') return '360°';
+  if (tech === 'dtf') return fbxEsTextil(cat) ? 'DTF Textil' : 'DTF UV';
+  if (tech === 'bordado') return 'Bordado';
   return (typeof TECH_NAME !== 'undefined' && TECH_NAME[tech]) || tech || '';
 }
 function fbxUnit(it) {
   const b = fbxPrecioBase(it.sku);
-  return b == null ? null : b + fbxPrecioTec(it.tech, it.logos);
+  return b == null ? null : b + fbxPrecioTec(it.tech, it.logos, it.cat);
 }
-function fbxTecPara(pid) { return FBX.tec[pid] || 'laser'; }
+function fbxTecsDe(p) { return p && p.sheet ? [{ id: 'laser', n: 'Láser' }, { id: '360', n: '360°' }, { id: 'dtf', n: 'DTF UV' }] : ((p && techsOf(p)) || []).map(t => ({ id: t.id, n: fbxTecNombre(t.id, 1, p.cat) })); }
+function fbxTecPara(pid) {
+  if (FBX.tec[pid]) return FBX.tec[pid];
+  const p = PRODUCTS.find(x => x.id === pid);
+  return p && !p.sheet ? ((fbxTecsDe(p)[0] || {}).id || '') : 'laser';
+}
 function fbxLogosPara(pid, tech) { return tech === 'laser' ? (FBX.logos[pid] || 1) : 1; }
 
 /* ---------- piezas de HTML (solo clases existentes) ---------- */
-function precioHtml(p, sel) {
+function precioHtml(p, sel, key) {
   if (FBX.externo || !FBX.hojaCargada) return '';
-  const sku = fbxSku(p, sel), base = fbxPrecioBase(sku), lista = FBX.precios[(sku || '').toUpperCase()];
+  const sku = fbxSku(p, sel, key), base = fbxPrecioBase(sku), lista = FBX.precios[(sku || '').toUpperCase()];
   if (base == null) return `<div class="cname">Precio: <b>a cotizar</b></div>`;
-  const key = p.id, tech = p.sheet ? fbxTecPara(key) : null, logos = fbxLogosPara(key, tech);
-  const extra = tech ? fbxPrecioTec(tech, logos) : 0;
+  const tech = fbxTecPara(p.id), logos = fbxLogosPara(p.id, tech);
+  const extra = fbxPrecioTec(tech, logos, p.cat);
   const tachado = lista && base < lista ? ` <span style="color:var(--muted);text-decoration:line-through">${fbxMoney(lista)}</span>` : '';
-  const desglose = extra > 0 ? ` <span style="color:var(--muted)">(${fbxMoney(base)} + ${fbxTecNombre(tech, logos)} ${fbxMoney(extra)})</span>` : (tech === 'laser' ? ` <span style="color:var(--muted)">· 1 logo láser incluido</span>` : '');
+  const desglose = extra > 0 ? ` <span style="color:var(--muted)">(${fbxMoney(base)} + ${fbxTecNombre(tech, logos, p.cat)} ${fbxMoney(extra)})</span>` : (tech === 'laser' ? ` <span style="color:var(--muted)">· 1 logo láser incluido</span>` : '');
   return `<div class="cname">Precio: <b>${fbxMoney(base + extra)}</b>${tachado} c/u · IVA incluido${desglose}</div>`;
 }
 /* Selector de técnica (y logos si es láser) en las tarjetas de vasos */
 function tecHtml(p) {
-  if (!p.sheet) return '';
+  const lista = fbxTecsDe(p);
+  if (!p.sheet && !p.apparel) return '';
+  if (lista.length < 2 && !p.sheet) return '';
   const k = p.id, t = fbxTecPara(k), n = FBX.logos[k] || 1;
   const b = (attr, val, on, txt) => `<button type="button" ${attr}="${k}:${val}" class="${on ? 'on' : ''}" aria-pressed="${on}">${txt}</button>`;
   return `<div class="segs">
-      <div class="seg" role="group" aria-label="Técnica">${b('data-tec', 'laser', t === 'laser', 'Grabado láser')}${b('data-tec', '360', t === '360', '360°')}${b('data-tec', 'dtf', t === 'dtf', 'DTF')}</div>
+      <div class="seg" role="group" aria-label="Técnica">${lista.map(x => b('data-tec', x.id, t === x.id, x.n)).join('')}</div>
       ${t === 'laser' ? `<div class="seg" role="group" aria-label="Logos">${b('data-logos', 1, n === 1, '1 logo')}${b('data-logos', 2, n === 2, '2')}${b('data-logos', 3, n === 3, '3')}</div>` : ''}
     </div>`;
+}
+/* Piezas en la tarjeta: 25 por defecto, con − y + */
+function qtyHtml(key) {
+  const q = FBX.qty[key] || FBX.PZS_DEFAULT;
+  return `<div class="cname" style="display:flex;align-items:center;gap:10px">Piezas
+      <div class="qty"><button type="button" data-kq="${key}:-1" aria-label="Menos">−</button><input type="number" min="1" value="${q}" data-kqi="${key}" aria-label="Piezas"><button type="button" data-kq="${key}:1" aria-label="Más">+</button></div></div>`;
 }
 function precioPill(it) {
   const logos = it.tech === 'laser' && (it.logos || 1) > 1 ? `<span class="pill">${it.logos} logos</span>` : '';
@@ -1104,10 +1125,13 @@ async function fbxCargarConfig() {
     if (!d.ok) return;
     FBX.promos = {};
     (d.promos || []).forEach(pr => { FBX.promos[pr.skuAplica === 'TODOS' ? '__TODOS__' : pr.skuAplica] = pr; });
-    const g = d.guia || {}, num = v => { const n = parseFloat(v); return isNaN(n) ? null : n; };
+    const g = Object.assign({}, d.guia || {}, d.config || {}), num = v => { const n = parseFloat(v); return isNaN(n) ? null : n; };
     if (num(g.PRECIO_LOGO_EXTRA) != null) FBX.TEC_PRECIO.logoExtra = num(g.PRECIO_LOGO_EXTRA);
     if (num(g.PRECIO_360) != null) FBX.TEC_PRECIO['360'] = num(g.PRECIO_360);
-    if (num(g.PRECIO_DTF) != null) FBX.TEC_PRECIO.dtf = num(g.PRECIO_DTF);
+    const dtfUv = num(g.PRECIO_DTF_UV) != null ? num(g.PRECIO_DTF_UV) : num(g.PRECIO_DTF);
+    if (dtfUv != null) FBX.TEC_PRECIO.dtfUv = dtfUv;
+    if (num(g.PRECIO_DTF_TEXTIL) != null) FBX.TEC_PRECIO.dtfTextil = num(g.PRECIO_DTF_TEXTIL);
+    if (num(g.PRECIO_BORDADO) != null) FBX.TEC_PRECIO.bordado = num(g.PRECIO_BORDADO);
     // Familias de color (filtro "Colores")
     (d.colores || []).forEach(c => {
       const hx = (c.hex || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -1146,6 +1170,8 @@ async function fbxCargarProductos() {
     const h = fbxCSVLine(filas[0] || '').map(x => fbxNorm(fbxCelda(x)).toUpperCase());
     const col = name => h.indexOf(name);
     const iColor = col('COLOR'), iHex = col('HEX'), iFam = col('FAMILIA'), iCat = col('CATEGORIA'), iLimpia = col('IMAGEN_LIMPIA');
+    const iModelo = col('MODELO'), iTalla = col('TALLA');
+    const iComp = ['COMPOSICION', 'MATERIAL', 'DESCRIPCION'].map(col).find(i => i >= 0);
     const iAsesor = FBX.externo ? col('PRECIO_' + (FBX.asesor.codigo || '').toUpperCase()) : -1;
     const rows = [];
     filas.slice(1).forEach(f => {
@@ -1164,10 +1190,13 @@ async function fbxCargarProductos() {
         color: iColor >= 0 ? c[iColor] : '', hex: iHex >= 0 ? c[iHex] : '',
         fam: iFam >= 0 ? fbxNorm(c[iFam]) : '', cat: iCat >= 0 ? fbxNorm(c[iCat]) : '',
         limpia: iLimpia >= 0 ? c[iLimpia] : '',
+        modelo: iModelo >= 0 ? c[iModelo] : '', talla: iTalla >= 0 ? c[iTalla] : '',
+        comp: iComp !== undefined ? c[iComp] : '',
       });
     });
     FBX.hojaCargada = true;
     fbxConstruirDesdeHoja(rows);
+    fbxConstruirAparel(rows);
   } catch (e) { console.warn('No se pudo leer el Sheet de productos; se usan los vasos del código', e); }
 }
 
@@ -1209,9 +1238,10 @@ function fbxConstruirDesdeHoja(rows) {
         fam: x.fam || previo.fam || 'gris',
       };
       if (!COLORS[COLORS[code].fam]) COLORS[COLORS[code].fam] = { n: titleCase(COLORS[code].fam), h: hx[0] || '#BFC3C9' };
-      // SKU sin foto en el código: URL del Sheet (columna D) o, si está vacía, img/vasos/<SKU>.webp
-      if (!IMGS[key][code]) IMGS[key][code] = x.img || `img/vasos/${code}.webp`;
-      if (!CLEAN[key][code]) CLEAN[key][code] = x.limpia || (x.img ? x.img : `img/vasos-limpias/${code}.webp`);
+      // Tarjeta: la foto de la columna D del Sheet manda; si está vacía, la del sitio (img/vasos/<SKU>.webp)
+      IMGS[key][code] = x.img || IMGS[key][code] || `img/vasos/${code}.webp`;
+      // Diseñador: foto limpia calibrada del sitio; IMAGEN_LIMPIA solo para SKUs que no la tienen
+      CLEAN[key][code] = CLEAN[key][code] || x.limpia || `img/vasos-limpias/${code}.webp`;
       const cap = x.cap ? x.cap.replace(/Oz/g, 'oz') : (g.oz ? `${g.oz} oz` : '');
       v[code] = { name: titleCase(x.nombre), cap };
       const t = STATUS_N(x.estatus); if (t) tag[code] = t;
@@ -1238,48 +1268,185 @@ function fbxConstruirDesdeHoja(rows) {
 }
 
 /* ---------- añadir sin diseñar ---------- */
+/* ---------- Playeras y gorras desde el Sheet (un SKU por modelo + talla + color) ---------- */
+const FBX_TALLAS = ['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', '2XL', 'XXXL', '3XL', 'UNITALLA', 'UNI'];
+const FBX_BASE = { playeras: 'polo', gorras: 'cap' };               // foto y zona de logo que usa cada categoría
+const FBX_FAM_GUESS = { negro: 'negro', blanco: 'blanco', marino: 'marino', navy: 'marino', azul: 'azul', oxford: 'azul',
+  rojo: 'rojo', gris: 'gris', plata: 'gris', grafito: 'gris', beige: 'beige', verde: 'verde', militar: 'verde',
+  amarillo: 'amarillo', naranja: 'naranja', rosa: 'rosa', morado: 'morado', cafe: 'cafe' };
+const fbxSlug = s => fbxNorm(s).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+/* "P27 MAN POLO GOLF PREMIUM S NEGRO" → modelo, talla, color (si no hay columnas MODELO / TALLA / COLOR) */
+function fbxPartesAparel(x) {
+  const t = x.nombre.trim().split(/\s+/);
+  let iT = -1;
+  for (let i = t.length - 1; i >= 0; i--) if (FBX_TALLAS.includes(t[i].toUpperCase())) { iT = i; break; }
+  const talla = (x.talla || (iT >= 0 ? t[iT] : '')).toUpperCase();
+  const color = x.color || (iT >= 0 ? t.slice(iT + 1).join(' ') : '');
+  let modelo = x.modelo || (iT >= 0 ? t.slice(0, iT).join(' ') : x.nombre);
+  if (!x.modelo) {
+    const w = modelo.split(/\s+/);
+    if (/^[A-Z]{0,2}\d+[A-Z]?$/i.test(w[0])) w.shift();                // código interno (P27)
+    let genero = '';
+    const g = w.findIndex(s => /^(MAN|MEN|HOMBRE|CABALLERO)$/i.test(s));
+    const m = w.findIndex(s => /^(WOM|WOMAN|WOMEN|MUJER|DAMA)$/i.test(s));
+    if (g >= 0) { genero = 'Hombre'; w.splice(g, 1); } else if (m >= 0) { genero = 'Mujer'; w.splice(m, 1); }
+    modelo = titleCase(w.join(' ')) + (genero ? ' ' + genero : '');
+  }
+  return { modelo, talla: talla || 'UNITALLA', color: color || 'Único' };
+}
+
+function fbxConstruirAparel(rows) {
+  const porCat = {};
+  rows.forEach(x => { if (FBX_BASE[x.cat] && !fbxNorm(x.estatus).includes('inactivo')) (porCat[x.cat] = porCat[x.cat] || []).push(x); });
+  Object.entries(porCat).forEach(([cat, filas]) => {
+    // El Sheet manda: fuera los productos de prueba del código de esta categoría
+    for (let i = PRODUCTS.length - 1; i >= 0; i--) if (PRODUCTS[i].cat === cat && !PRODUCTS[i].apparel) {
+      const j = DESIGN_PRODUCTS.indexOf(PRODUCTS[i]); if (j >= 0) DESIGN_PRODUCTS.splice(j, 1);
+      PRODUCTS.splice(i, 1);
+    }
+    const base = FBX_BASE[cat];
+    const grupos = {};
+    filas.forEach(x => {
+      const pt = fbxPartesAparel(x);
+      const key = `${cat}_${fbxSlug(pt.modelo)}`;
+      (grupos[key] = grupos[key] || { key, modelo: pt.modelo, filas: [] }).filas.push(Object.assign({}, x, pt));
+    });
+    Object.values(grupos).forEach(g => {
+      const key = g.key, vars = {}, colors = [], agotado = {};
+      PHOTO[key] = key; TNAME[key] = TNAME[base];
+      IMGS[key] = {}; CLEAN[key] = {};
+      if (SHAPE[base]) SHAPE[key] = SHAPE[base];
+      if (ZONES[base]) ZONES[key] = ZONES[base];
+      g.filas.forEach(x => {
+        const cs = fbxSlug(x.color), ck = `${key}~${cs}`;
+        if (!vars[ck]) {
+          vars[ck] = {}; colors.push(ck);
+          const fam = x.fam || FBX_FAM_GUESS[cs.split('-')[0]] || cs;
+          const hx = (x.hex || '').split(',').map(s => s.trim()).filter(Boolean);
+          const ref = COLORS[cs] || COLORS[fam] || {};
+          COLORS[ck] = { n: titleCase(x.color), h: hx.length > 1 ? `linear-gradient(135deg,${hx[0]},${hx[1]})` : (hx[0] || ref.h || '#BFC3C9'), fam };
+          if (!COLORS[fam]) COLORS[fam] = { n: titleCase(fam), h: COLORS[ck].h };
+          const bi = IMGS[base] || {}, bc = CLEAN[base] || {};
+          IMGS[key][ck] = x.img || bi[cs] || bi[fam] || Object.values(bi)[0] || '';
+          CLEAN[key][ck] = bc[cs] || bc[fam] || Object.values(bc)[0] || x.img || '';
+        }
+        vars[ck][x.talla] = x.sku;
+        if (fbxNorm(x.estatus).includes('agotado')) agotado[x.sku] = true;
+      });
+      const orden = t => { const i = FBX_TALLAS.indexOf(t); return i < 0 ? 99 : i; };
+      let p = PRODUCTS.find(q => q.id === key);
+      if (!p) { p = { id: key, cat, type: key, apparel: true, date: 50 }; PRODUCTS.push(p); }
+      Object.assign(p, {
+        name: g.modelo, linea: g.modelo.replace(/\s+(Hombre|Mujer)$/i, ''), colors, vars, agotado,
+        tallas: [...new Set(g.filas.map(x => x.talla))].sort((a, b) => orden(a) - orden(b)),
+        comp: g.filas.find(x => x.comp)?.comp || '',
+        sku: g.filas[0].sku,
+      });
+      p.noDesign = !ZONES[key];
+      if (!p.noDesign && !DESIGN_PRODUCTS.includes(p) && !SOON.has(cat)) DESIGN_PRODUCTS.push(p);
+      if (!colors.includes(state.sel[key])) state.sel[key] = colors[0];
+      if (!catCover[cat]) catCover[cat] = [key, colors[0]];
+    });
+  });
+}
+/* Talla elegida en la tarjeta (M por defecto si existe) y su SKU */
+function fbxTallaDe(p, key, color) {
+  const disp = Object.keys((p.vars || {})[color] || {});
+  const t = FBX.talla[key];
+  if (t && disp.includes(t)) return t;
+  return disp.includes('M') ? 'M' : (p.tallas || []).find(x => disp.includes(x)) || disp[0] || '';
+}
+function fbxSkuAparel(p, key, color) { const t = fbxTallaDe(p, key, color); return ((p.vars || {})[color] || {})[t] || p.sku; }
+function tallaHtml(p, key, sel) {
+  if (!p.apparel) return '';
+  const disp = (p.vars || {})[sel] || {}, actual = fbxTallaDe(p, key, sel);
+  return `<div class="segs"><div class="seg" role="group" aria-label="Talla">${p.tallas.map(t => {
+    const sku = disp[t], off = !sku || p.agotado[sku];
+    return `<button type="button" data-talla="${key}:${t}" class="${t === actual ? 'on' : ''}" ${off ? 'disabled style="opacity:.35"' : ''} aria-pressed="${t === actual}">${t}</button>`;
+  }).join('')}</div></div>`;
+}
+
+/* ---------- añadir sin diseñar ---------- */
 function fbxAnadir(key) {
   const pid = key.split('@')[0];
   const p = PRODUCTS.find(x => x.id === pid);
   if (!p) return;
   const color = state.sel[key] || p.colors[0];
   if (p.vtag && p.vtag[color] === '¡AGOTADO!') { toast('Ese color está agotado. Elige otro.'); return; }
-  const tech = p.sheet ? fbxTecPara(pid) : ((techsOf(p) || [])[0] || {}).id || '';
+  const tech = fbxTecPara(pid);
   const logos = fbxLogosPara(pid, tech);
-  const sku = fbxSku(p, color);
+  const sku = fbxSku(p, color, key);
+  const nombre = p.sheet ? p.sheet[color].name : p.apparel ? `${p.name} · Talla ${fbxTallaDe(p, key, color)}` : p.name;
+  if (p.apparel && p.agotado[sku]) { toast('Esa talla está agotada. Elige otra.'); return; }
+  const pcs = Math.max(1, Number(FBX.qty[key]) || FBX.PZS_DEFAULT);
   const igual = cart.find(it => it.sku === sku && it.tech === tech && (it.logos || 1) === logos && it.sinDiseno);
-  if (igual) igual.pcs += FBX.PZS_DEFAULT;
+  if (igual) igual.pcs += pcs;
   else {
     const set = IMGS[p.type === 'perf' ? 'perf_frente' : PHOTO[p.type]] || {};
     cart.push({
       id: Date.now(), pid, sinDiseno: true,
-      name: p.sheet ? p.sheet[color].name : p.name, sku, cat: p.cat,
+      name: nombre, sku, cat: p.cat,
       comp: p.sheet ? `Capacidad ${p.sheet[color].cap} · Acero inoxidable` : p.comp,
-      color, tech, logos, place: '', pcs: FBX.PZS_DEFAULT, file: 'Sin diseño (cotización directa)',
+      color, tech, logos, place: '', pcs, file: 'Logo por WhatsApp',
       img: set[color] || Object.values(set)[0] || '',
     });
   }
   saveCart();
-  toast(`${p.sheet ? p.sheet[color].name : p.name} agregado al carrito (${FBX.PZS_DEFAULT} pzs)`);
+  toast(`${nombre} agregado al carrito (${pcs} pzs)`);
 }
 
 /* ---------- datos del cliente en el resumen del carrito ---------- */
 function fbxCampos() {
   const wa = document.getElementById('waBtn');
   if (!wa || document.getElementById('k-nombre')) return;
+  const fld = (id, label, attrs = '') => `<div class="fld"><label for="${id}">${label}</label><input id="${id}" ${attrs}><span class="err"></span></div>`;
   const box = document.createElement('div');
   box.style.cssText = 'display:grid;gap:12px';
   box.innerHTML = `
-    <div class="fld"><label for="k-nombre">Nombre completo</label><input id="k-nombre" autocomplete="name" required><span class="err"></span></div>
-    <div class="fld"><label for="k-tel">Teléfono (WhatsApp)</label><input id="k-tel" type="tel" inputmode="tel" autocomplete="tel" placeholder="10 dígitos" required><span class="err"></span></div>
-    <div class="fld"><label for="k-empresa">Empresa (opcional)</label><input id="k-empresa" autocomplete="organization"><span class="err"></span></div>
-    <div class="fld"><label for="k-correo">Correo (opcional)</label><input id="k-correo" type="email" autocomplete="email"><span class="err"></span></div>`;
+    <div class="seg" id="k-modo" role="group" aria-label="Tipo de solicitud" style="display:flex;width:100%">
+      <button type="button" data-modo="rapida" class="on" style="flex:1">Cotización rápida</button>
+      <button type="button" data-modo="completo" style="flex:1">Pedido completo</button>
+    </div>
+    <small id="k-modo-hint">Solo tu nombre y teléfono; un asesor te contacta para completar los datos.</small>
+    ${fld('k-nombre', 'Nombre completo', 'autocomplete="name" required')}
+    ${fld('k-tel', 'Teléfono (WhatsApp)', 'type="tel" inputmode="tel" autocomplete="tel" placeholder="10 dígitos" required')}
+    <div id="k-completo" hidden>
+      <div style="display:grid;gap:12px">
+        ${fld('k-empresa', 'Empresa o razón social', 'autocomplete="organization"')}
+        ${fld('k-correo', 'Correo', 'type="email" autocomplete="email"')}
+        ${fld('k-rfc', 'RFC (si requieres factura)', 'autocomplete="off" style="text-transform:uppercase"')}
+        <label class="tgl" for="k-pickup"><input type="checkbox" id="k-pickup"> Recojo en instalaciones (Cancún)</label>
+        <div id="k-envio"><div style="display:grid;gap:12px">
+          ${fld('k-ciudad', 'Ciudad', 'autocomplete="address-level2"')}
+          ${fld('k-estado', 'Estado', 'autocomplete="address-level1"')}
+          ${fld('k-cp', 'Código postal', 'inputmode="numeric" autocomplete="postal-code" maxlength="5"')}
+        </div></div>
+        ${fld('k-fecha', 'Fecha en que lo necesitas', 'type="date"')}
+        <div class="fld"><label for="k-pago">Forma de pago</label><select id="k-pago"><option value="">Selecciona…</option><option value="Transferencia">Transferencia bancaria</option><option value="Depósito">Depósito bancario</option><option value="Tarjeta CLIP">Tarjeta de crédito/débito (CLIP)</option></select><span class="err"></span></div>
+        <div class="fld"><label for="k-tipo">Tipo de pedido</label><select id="k-tipo"><option value="">Selecciona…</option><option>Corporativo</option><option>Evento</option><option>Boda</option><option>Regalo personal</option><option>Otro</option></select><span class="err"></span></div>
+        <div id="k-otro-box" hidden>${fld('k-otro', '¿Cuál?', 'placeholder="Ej: Quinceañera, Baby shower…"')}</div>
+      </div>
+    </div>`;
   wa.parentNode.insertBefore(box, wa);
+  const modo = m => {
+    FBX.modo = FBX.externo ? 'rapida' : m;
+    document.querySelectorAll('#k-modo button').forEach(b => b.classList.toggle('on', b.dataset.modo === FBX.modo));
+    document.getElementById('k-completo').hidden = FBX.modo !== 'completo';
+    document.getElementById('k-modo-hint').textContent = FBX.modo === 'completo'
+      ? 'Con tus datos de facturación y entrega tu pedido avanza más rápido.'
+      : 'Solo tu nombre y teléfono; un asesor te contacta para completar los datos.';
+  };
+  FBX.ponerModo = modo;
+  document.getElementById('k-modo').addEventListener('click', e => { const b = e.target.closest('[data-modo]'); if (b) modo(b.dataset.modo); });
+  document.getElementById('k-pickup').addEventListener('change', e => { document.getElementById('k-envio').hidden = e.target.checked; });
+  document.getElementById('k-tipo').addEventListener('change', e => { document.getElementById('k-otro-box').hidden = e.target.value !== 'Otro'; });
   try {
     const g = JSON.parse(localStorage.getItem('fbcliente') || '{}');
-    ['nombre', 'tel', 'empresa', 'correo'].forEach(k => { if (g[k]) document.getElementById('k-' + k).value = g[k]; });
+    Object.keys(g).forEach(k => { const el = document.getElementById('k-' + k); if (el && g[k]) el.value = g[k]; });
   } catch (_) {}
 }
+const fbxVal = id => (document.getElementById(id)?.value || '').trim();
 function fbxValidar() {
   let ok = true;
   const set = (id, msg) => {
@@ -1287,13 +1454,16 @@ function fbxValidar() {
     fld.classList.toggle('bad', !!msg); fld.querySelector('.err').textContent = msg || '';
     if (msg) ok = false;
   };
-  const nom = document.getElementById('k-nombre').value.trim();
-  const tel = document.getElementById('k-tel').value.replace(/\D/g, '');
-  const cor = document.getElementById('k-correo').value.trim();
-  set('k-nombre', nom ? '' : 'Escribe tu nombre');
-  set('k-tel', tel.length === 10 ? '' : 'Escribe un teléfono de 10 dígitos');
-  set('k-correo', !cor || /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(cor) ? '' : 'Revisa el correo');
-  if (!ok) document.querySelector('#csum .fld.bad input').focus();
+  const completo = FBX.modo === 'completo', pickup = document.getElementById('k-pickup').checked;
+  set('k-nombre', fbxVal('k-nombre') ? '' : 'Escribe tu nombre');
+  set('k-tel', fbxVal('k-tel').replace(/\D/g, '').length === 10 ? '' : 'Escribe un teléfono de 10 dígitos');
+  const cor = fbxVal('k-correo');
+  set('k-correo', !completo ? '' : !cor ? 'Escribe tu correo' : /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(cor) ? '' : 'Revisa el correo');
+  set('k-rfc', !completo || !fbxVal('k-rfc') || /^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/i.test(fbxVal('k-rfc')) ? '' : 'Revisa el RFC (12 o 13 caracteres)');
+  set('k-ciudad', !completo || pickup || fbxVal('k-ciudad') ? '' : 'Escribe la ciudad de entrega');
+  set('k-cp', !completo || pickup || /^\d{5}$/.test(fbxVal('k-cp')) ? '' : 'Código postal de 5 dígitos');
+  set('k-otro', !completo || fbxVal('k-tipo') !== 'Otro' || fbxVal('k-otro') ? '' : 'Cuéntanos qué tipo de pedido es');
+  if (!ok) { const bad = document.querySelector('#csum .fld.bad input, #csum .fld.bad select'); if (bad) bad.focus(); }
   return ok;
 }
 
@@ -1307,14 +1477,22 @@ function fbxEnviar(e) {
   e.preventDefault();
   if (!cart.length) { toast('Tu carrito está vacío.'); return; }
   const totPcs = cart.reduce((a, b) => a + b.pcs, 0);
-  if (totPcs < 25) { toast(`Te faltan ${25 - totPcs} piezas para el mínimo de compra (25 piezas).`); return; }
   if (!fbxValidar()) return;
 
-  const nom = document.getElementById('k-nombre').value.trim();
-  const tel = document.getElementById('k-tel').value.replace(/\D/g, '');
-  const emp = document.getElementById('k-empresa').value.trim();
-  const cor = document.getElementById('k-correo').value.trim();
-  try { localStorage.setItem('fbcliente', JSON.stringify({ nombre: nom, tel, empresa: emp, correo: cor })); } catch (_) {}
+  const completo = FBX.modo === 'completo';
+  const nom = fbxVal('k-nombre'), tel = fbxVal('k-tel').replace(/\D/g, '');
+  const pickup = completo && document.getElementById('k-pickup').checked;
+  const D = completo ? {
+    empresa: fbxVal('k-empresa'), correo: fbxVal('k-correo'), rfc: fbxVal('k-rfc').toUpperCase(),
+    ciudad: pickup ? '' : fbxVal('k-ciudad'), estado: pickup ? '' : fbxVal('k-estado'), cp: pickup ? '' : fbxVal('k-cp'),
+    fecha: fbxVal('k-fecha'), pago: fbxVal('k-pago'),
+    tipo: fbxVal('k-tipo') === 'Otro' ? (fbxVal('k-otro') || 'Otro') : fbxVal('k-tipo'),
+  } : {};
+  try {
+    const g = { nombre: nom, tel };
+    if (completo) Object.assign(g, { empresa: D.empresa, correo: D.correo, rfc: D.rfc, ciudad: fbxVal('k-ciudad'), estado: fbxVal('k-estado'), cp: fbxVal('k-cp'), pago: D.pago });
+    localStorage.setItem('fbcliente', JSON.stringify(Object.assign(JSON.parse(localStorage.getItem('fbcliente') || '{}'), g)));
+  } catch (_) {}
 
   const now = new Date();
   const pedidoId = fbxIdPedido(now);
@@ -1325,16 +1503,23 @@ function fbxEnviar(e) {
 
   const lineas = cart.map((it, i) => {
     const u = verPrecio ? fbxUnit(it) : null;
-    const diseno = it.sinDiseno ? 'sin diseño' : `${it.place ? `logo ${it.place.toLowerCase()} · ` : ''}archivo: ${it.file}`;
-    return `${i + 1}) ${it.name} (SKU ${it.sku}) · ${COLORS[it.color].n} · ${fbxTecNombre(it.tech, it.logos)} · ${it.pcs} pzs${u != null ? ` · ${fbxMoney(u)} c/u` : ''} · ${diseno}`;
+    const diseno = it.sinDiseno ? 'logo: lo comparto por este chat' : `vista previa con mi logo${it.place ? ` (${it.place.toLowerCase()})` : ''} · archivo: ${it.file}`;
+    return `${i + 1}) ${it.name} (SKU ${it.sku}) · ${COLORS[it.color].n} · ${fbxTecNombre(it.tech, it.logos, it.cat)} · ${it.pcs} pzs${u != null ? ` · ${fbxMoney(u)} c/u` : ''} · ${diseno}`;
   });
-  let msg = `Hola, me gustaría cotizar este pedido:\nPedido: ${pedidoId}\nNombre: ${nom}\nTeléfono: ${tel}\n`;
-  if (emp) msg += `Empresa: ${emp}\n`;
-  if (cor) msg += `Correo: ${cor}\n`;
+  let msg = `Hola, me gustaría ${completo ? 'hacer este pedido' : 'cotizar este pedido'}:\nPedido: ${pedidoId} (${completo ? 'pedido completo' : 'cotización rápida'})\nNombre: ${nom}\nTeléfono: ${tel}\n`;
+  if (completo) {
+    if (D.empresa) msg += `Empresa: ${D.empresa}\n`;
+    msg += `Correo: ${D.correo}\n`;
+    msg += D.rfc ? `RFC: ${D.rfc} (requiero factura)\n` : `Factura: no\n`;
+    msg += pickup ? `Entrega: recojo en instalaciones\n` : `Entrega: ${[D.ciudad, D.estado].filter(Boolean).join(', ')} · C.P. ${D.cp}\n`;
+    if (D.fecha) msg += `Lo necesito para: ${D.fecha.split('-').reverse().join('/')}\n`;
+    if (D.pago) msg += `Forma de pago: ${D.pago}\n`;
+    if (D.tipo) msg += `Tipo de pedido: ${D.tipo}\n`;
+  }
   msg += `\n${lineas.join('\n')}\n\nTotal: ${totPcs} piezas.`;
   if (verPrecio) msg += `\nSubtotal de referencia: ${fbxMoney(fbxSubtotal())} MXN (IVA incluido).`;
   msg += `\n\nAsesor: ${FBX.asesor.codigo}\nCampaña: ${origen}`;
-  if (cart.some(it => !it.sinDiseno)) msg += `\n\nTe adjunto mi logo en este chat.`;
+  msg += `\n\nTe comparto mi logo en este chat.`;
 
   // WhatsApp primero (abrirlo después de esperar la red lo bloquea el navegador)
   window.open(`https://wa.me/${WHATSAPP}?text=${encodeURIComponent(msg)}`, '_blank');
@@ -1342,15 +1527,15 @@ function fbxEnviar(e) {
   // Una línea por SKU + técnica (se suman piezas iguales)
   const lin = {};
   cart.forEach(it => {
-    const tec = fbxTecNombre(it.tech, it.logos);
+    const tec = fbxTecNombre(it.tech, it.logos, it.cat);
     const k = `${(it.sku || '').toUpperCase()}|${tec}`;
-    const det = it.sinDiseno ? 'Sin diseño' : [it.place, `Archivo: ${it.file}`].filter(Boolean).join(' · ');
+    const det = it.sinDiseno ? 'Logo por WhatsApp' : ['Vista previa en la web', it.place, `Archivo: ${it.file}`].filter(Boolean).join(' · ');
     if (!lin[k]) lin[k] = {
       sku: it.sku,
       descripcion: FBX.nombres[(it.sku || '').toUpperCase()] || it.name,
       cantidad: 0,
       precioUnit: fbxPrecioBase(it.sku) || 0,           // solo producto (BE)
-      precioTecnica: fbxPrecioTec(it.tech, it.logos),   // técnica por pieza (BZ)
+      precioTecnica: fbxPrecioTec(it.tech, it.logos, it.cat), // técnica por pieza (BZ)
       tecnica: tec,                                     // BX
       detalle: [],                                      // BY
       precioAsesor: FBX.preciosAsesor[(it.sku || '').toUpperCase()],
@@ -1362,11 +1547,13 @@ function fbxEnviar(e) {
   const payload = {
     action: 'registrarPedido',
     pedidoId, fecha, hora: hora + ' hrs',
-    tipo: 'Pedido completo',
+    tipo: completo ? 'Pedido completo' : 'Cotización rápida',
     asesor: FBX.asesor.codigo, asesorNombre: FBX.asesor.nombre || '',
     nombre: nom, telefono: tel, origen,
-    empresa: emp, correo: cor,
-    grabado: 'Sí', logo: cart.some(it => !it.sinDiseno) ? 'Sí' : 'Pendiente',
+    empresa: D.empresa || '', correo: D.correo || '', rfc: D.rfc || '',
+    ciudad: [D.ciudad, D.estado].filter(Boolean).join(', '), cp: D.cp || '', fechaLimite: D.fecha || '', formaPago: D.pago || '', tipoPedido: D.tipo || '',
+    tipoEntrega: completo ? (pickup ? 'Pick Up en instalaciones' : 'Envío a domicilio') : '',
+    grabado: 'Sí', logo: 'Sí',
     productos,
   };
   fetch(FBX.APPS_SCRIPT_URL, {
@@ -1376,7 +1563,8 @@ function fbxEnviar(e) {
   }).catch(err => console.warn('Registro en Sheets falló', err));
 
   cart = []; saveCart(); renderCart();
-  toast(`Pedido ${pedidoId} enviado.`);
+  go('inicio');
+  toast(`Pedido ${pedidoId} enviado. Continúa la conversación en WhatsApp.`);
 }
 
 /* ---------- eventos y arranque ---------- */
@@ -1387,16 +1575,62 @@ document.addEventListener('DOMContentLoaded', async () => {
   const grid = document.getElementById('grid');
   if (grid) grid.addEventListener('click', e => {
     const a = e.target.closest('[data-qadd]'); if (a) { fbxAnadir(a.dataset.qadd); return; }
+    const tl = e.target.closest('[data-talla]');
+    if (tl) { const i = tl.dataset.talla.lastIndexOf(':'); FBX.talla[tl.dataset.talla.slice(0, i)] = tl.dataset.talla.slice(i + 1); renderGrid(); return; }
     const t = e.target.closest('[data-tec]');
     if (t) { const [k, v] = t.dataset.tec.split(':'); FBX.tec[k] = v; renderGrid(); return; }
     const l = e.target.closest('[data-logos]');
-    if (l) { const [k, v] = l.dataset.logos.split(':'); FBX.logos[k] = Number(v); renderGrid(); }
+    if (l) { const [k, v] = l.dataset.logos.split(':'); FBX.logos[k] = Number(v); renderGrid(); return; }
+    const q = e.target.closest('[data-kq]');
+    if (q) {
+      const i = q.dataset.kq.lastIndexOf(':'), k = q.dataset.kq.slice(0, i);
+      FBX.qty[k] = Math.max(1, (FBX.qty[k] || FBX.PZS_DEFAULT) + Number(q.dataset.kq.slice(i + 1)));
+      renderGrid();
+    }
   });
+  if (grid) grid.addEventListener('change', e => {
+    const i = e.target.closest('[data-kqi]'); if (!i) return;
+    FBX.qty[i.dataset.kqi] = Math.max(1, parseInt(i.value) || 1); i.value = FBX.qty[i.dataset.kqi];
+  });
+  // "Cuenta" → WhatsApp (mismo botón y estilo) + botón flotante de WhatsApp
+  const waIcon = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2c-1.5 0-3-.4-4.3-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8-.2-.1-.4-.1-.6.1l-.8 1c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.2-.4.2-.4.7-1.3.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4c1.7.7 2.4.8 3.2.7.5-.1 1.5-.6 1.7-1.2.2-.6.2-1.1.2-1.2-.1-.2-.3-.2-.5-.3z"/></svg>';
+  const abrirWA = () => window.open(`https://wa.me/${WHATSAPP}?text=${encodeURIComponent('Hola, me gustaría recibir información de FB Custom.')}`, '_blank');
+  const acct = document.getElementById('acctBtn');
+  if (acct) {
+    const nb = acct.cloneNode(false);                 // mismo botón, sin el evento de "Mi cuenta"
+    nb.setAttribute('aria-label', 'WhatsApp');
+    nb.innerHTML = waIcon + '<span class="acct-label">WhatsApp</span>';
+    acct.replaceWith(nb); nb.addEventListener('click', abrirWA);
+  }
+  const flot = document.createElement('a');
+  flot.href = '#'; flot.setAttribute('aria-label', 'Escríbenos por WhatsApp'); flot.title = 'Escríbenos por WhatsApp';
+  flot.style.cssText = 'position:fixed;right:calc(18px + env(safe-area-inset-right,0px));bottom:calc(18px + env(safe-area-inset-bottom,0px));width:56px;height:56px;border-radius:50%;background:#25D366;color:#fff;display:grid;place-items:center;box-shadow:0 4px 14px rgba(0,0,0,.22);z-index:60';
+  flot.innerHTML = waIcon.replace('width="18" height="18"', 'width="28" height="28"');
+  flot.addEventListener('click', e => { e.preventDefault(); abrirWA(); });
+  document.body.appendChild(flot);
   await fbxCargarAsesor();
+  if (FBX.externo && FBX.ponerModo) { document.getElementById('k-modo').hidden = true; FBX.ponerModo('rapida'); }
   await fbxCargarConfig();
   fbxAplicarCategorias();
   await fbxCargarProductos();
   try { renderCatCards(); } catch (_) {}
+  // Menú "Categorías" del encabezado: una opción por categoría activa (nombres de la hoja Categorias)
+  const dd = document.getElementById('ddMenu');
+  const modoMenu = {};
+  (FBX.categorias || []).forEach(c => { modoMenu[c.clave] = fbxNorm(c.menu).startsWith('modelo') ? 'modelos' : 'categoria'; });
+  if (dd) dd.innerHTML = Object.entries(CATS).filter(([k]) => !SOON.has(k) && PRODUCTS.some(p => p.cat === k))
+    .map(([k, c]) => {
+      if (modoMenu[k] !== 'modelos') return `<button role="menuitem" data-ddcat="${k}"><b>${c.n}</b></button>`;
+      const lineas = [...new Set(PRODUCTS.filter(p => p.cat === k).map(p => p.linea || p.name))];
+      return lineas.map(l => `<button role="menuitem" data-fbxline="${k}|${l}"><b>${l}</b></button>`).join('');
+    }).join('');
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-fbxline]'); if (!b) return;
+    const i = b.dataset.fbxline.indexOf('|'), cat = b.dataset.fbxline.slice(0, i), linea = b.dataset.fbxline.slice(i + 1);
+    state.only = null; state.cats = new Set([cat]); state.colors.clear();
+    state.q = linea; smart.value = linea;
+    closeDD(); go('catalogo');
+  });
   try { renderFilters(); renderGrid(); } catch (_) {}
   try { renderCart(); } catch (_) {}
 });
@@ -1413,7 +1647,7 @@ const COLORS = {
 };
 const CATS = {
   gorras:{n:"Gorras", sub:"Bordado frontal"},
-  drinkware:{n:"Drinkware", sub:"Grabado láser"},
+  drinkware:{n:"Termos Drinkware", sub:"Grabado láser"},
   playeras:{n:"Playeras Polo", sub:"Logo en pecho"}
 };
 /* ===== Catálogo ===== */
@@ -1515,7 +1749,7 @@ function renderGrid(){
   if(state.sort==="az")list.sort((a,b)=>a.name.localeCompare(b.name,"es"));
   if(state.sort==="colors")list.sort((a,b)=>b.colors.length-a.colors.length);
   const one=state.cats.size===1?[...state.cats][0]:null;const onlyP=state.only?PRODUCTS.find(x=>x.id===state.only):null;
-  const ttl=onlyP?onlyP.name:one?(one==="drinkware"?"Vasos":CATS[one].n):"Catálogo";
+  const ttl=onlyP?onlyP.name:one?CATS[one].n:"Catálogo";
   document.getElementById("catTitle").textContent=ttl;
   document.getElementById("crumbCat").textContent=ttl;
   document.getElementById("count").textContent=`${list.length} producto${list.length===1?"":"s"}`;
@@ -1538,13 +1772,13 @@ function renderGrid(){
     if(SOON.has(p.cat))return `<article class="card soon" aria-label="${p.name}: próximamente"><div class="soon-wrap" aria-hidden="true"><div class="media">${svgFor(p.type,sel,state.view[p.id])}</div><div class="sku">SKU: ${p.sku}</div><h3>${p.name}</h3><div class="cname">${p.colors.length} colores</div></div><span class="soon-badge">PRÓXIMAMENTE</span></article>`;
     return `<article class="card">
       <div class="media zoomable">${svgFor(p.type,sel,state.view[p.id])}${p.views?`<div class="views" role="group" aria-label="Vistas">${p.views.map(v=>`<button type="button" class="${(state.view[p.id]||"frente")===v?"on":""}" data-view="${p.id}:${v}" aria-pressed="${(state.view[p.id]||"frente")===v}">${VIEW_N[v]}</button>`).join("")}</div>`:""}${(()=>{const t=p.vtag?p.vtag[sel]:p.tag;return t?`<span class="tag${t==="¡AGOTADO!"?" out":""}">${t}</span>`:""})()}
-        <button class="fav" data-qadd="${key}" aria-label="Añadir al carrito" title="Añadir al carrito (25 pzs)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4h2l2.4 11.2a1 1 0 0 0 1 .8h9.2a1 1 0 0 0 1-.8L21 8H6.2"/><circle cx="9.5" cy="20" r="1.3"/><circle cx="17.5" cy="20" r="1.3"/></svg></button></div>
-      <div class="sku">SKU: ${p.sheet?sel:p.sku}</div><h3>${p.name}</h3>
+        <button class="fav" style="opacity:1" data-qadd="${key}" aria-label="Añadir al carrito" title="Añadir al carrito"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4h2l2.4 11.2a1 1 0 0 0 1 .8h9.2a1 1 0 0 0 1-.8L21 8H6.2"/><circle cx="9.5" cy="20" r="1.3"/><circle cx="17.5" cy="20" r="1.3"/></svg></button></div>
+      <div class="sku">SKU: ${fbxSku(p,sel,key)}</div><h3>${p.name}</h3>
       ${p.sheet?`<div class="comp"><b>Descripción</b><span>Nombre del vaso: ${p.sheet[sel].name}</span><span>Capacidad: ${p.sheet[sel].cap}</span><span>Acero inoxidable</span></div>
       <div class="swatches" role="group" aria-label="Colores disponibles">${p.colors.map(c=>`<button class="sw ${c===sel?"on":""}" style="background:${hexOf(p,c)}" data-sw="${key}:${c}" title="${COLORS[c].n}" aria-label="${COLORS[c].n}" aria-pressed="${c===sel}"></button>`).join("")}</div>
-      <div class="cname">Color: <b>${COLORS[sel].n}</b> · ${p.colors.length} colores · <span style="color:var(--muted)">Mín. 25 pzs</span></div>${tecHtml(p)}${precioHtml(p,sel)}`:`      <div class="swatches" role="group" aria-label="Colores disponibles">${p.colors.map(c=>`<button class="sw ${c===sel?"on":""}" style="background:${hexOf(p,c)}" data-sw="${key}:${c}" title="${COLORS[c].n}" aria-label="${COLORS[c].n}" aria-pressed="${c===sel}"></button>`).join("")}</div>
-      <div class="cname">Color: <b>${COLORS[sel].n}</b> · ${p.colors.length} colores</div>${precioHtml(p,sel)}
-      <div class="comp">${p.specs?`<b>Descripción</b><span>${p.specs.mat}</span><span>Capacidad: ${p.specs.cap}</span><span>Color: ${COLORS[sel].n}</span><span>Propiedades: ${p.specs.prop}</span>`:(p.views?`<b>Descripción</b><span>${p.comp}</span><span>Color: ${COLORS[sel].n}</span>`:`<b>Composición</b><span>${p.comp}</span>`)}<span style="color:var(--muted)">Mín. 25 pzs por pedido · ${techLabel(p)}</span></div>`}
+      <div class="cname">Color: <b>${COLORS[sel].n}</b> · ${p.colors.length} colores · <span style="color:var(--muted)">Grabado y envío gratis desde 25 pzs</span></div>${tecHtml(p)}${precioHtml(p,sel,key)}${qtyHtml(key)}`:`      <div class="swatches" role="group" aria-label="Colores disponibles">${p.colors.map(c=>`<button class="sw ${c===sel?"on":""}" style="background:${hexOf(p,c)}" data-sw="${key}:${c}" title="${COLORS[c].n}" aria-label="${COLORS[c].n}" aria-pressed="${c===sel}"></button>`).join("")}</div>
+      <div class="cname">Color: <b>${COLORS[sel].n}</b> · ${p.colors.length} colores</div>${tallaHtml(p,key,sel)}${tecHtml(p)}${precioHtml(p,sel,key)}${qtyHtml(key)}
+      <div class="comp">${p.specs?`<b>Descripción</b><span>${p.specs.mat}</span><span>Capacidad: ${p.specs.cap}</span><span>Color: ${COLORS[sel].n}</span><span>Propiedades: ${p.specs.prop}</span>`:(p.views?`<b>Descripción</b><span>${p.comp}</span><span>Color: ${COLORS[sel].n}</span>`:`<b>Composición</b><span>${p.comp}</span>`)}<span style="color:var(--muted)">Grabado y envío gratis desde 25 pzs · ${techLabel(p)}</span></div>`}
       ${p.noDesign?`<button class="btn add" data-qadd="${key}">Añadir al carrito</button>`:`<button class="btn add" data-design="${p.id}" data-dkey="${key}">Diséñalo con tu logo</button>`}</article>`;
   }).join("");
 }
@@ -1660,8 +1894,8 @@ const ZONES={
 };
 const TECHS={
   gorras:[{id:"bordado",n:"Bordado",d:"Hilo a todo color con relieve."}],
-  playeras:[{id:"rubber",n:"Efecto rubber",d:"Acabado de goma con ligero relieve."},{id:"bordado",n:"Bordado",d:"Hilo a todo color con relieve."}],
-  drinkware:[{id:"laser",n:"Grabado láser",d:"Acabado acero: el logo se graba en el metal."},{id:"360",n:"Grabado láser 360°",d:"El grabado rodea todo el vaso."},{id:"dtf",n:"DTF",d:"Impresión a todo color sobre el vaso."}]
+  playeras:[{id:"dtf",n:"DTF Textil",d:"Impresión a todo color, delgada y flexible sobre la tela."},{id:"bordado",n:"Bordado",d:"Hilo a todo color con relieve."}],
+  drinkware:[{id:"laser",n:"Láser",d:"Acabado acero: el logo se graba en el metal."},{id:"360",n:"360°",d:"El grabado láser rodea todo el vaso."},{id:"dtf",n:"DTF UV",d:"Impresión a todo color sobre el vaso."}]
 };
 /* Técnicas por modelo (sustituyen a las de la categoría) */
 const TECHS_BY={p2:[{id:"rubber",n:"Efecto rubber",d:"Acabado de goma con ligero relieve."},{id:"dtf",n:"DTF",d:"Impresión a todo color, delgada y flexible sobre la tela."}]};
@@ -2058,25 +2292,25 @@ async function thumb(src){const im=await loadImg(src);const s=360,c=document.cre
   return c.toDataURL("image/jpeg",0.85);}
 document.getElementById("addCart").addEventListener("click",async()=>{
   if(!dz.result)return;const p=curP();const pcs=Math.max(1,parseInt(document.getElementById("qty").value)||1);
-  cart.push({id:Date.now(),pid:p.id,name:p.sheet?p.sheet[dz.color].name:p.name,sku:p.sheet?dz.color:p.sku,cat:p.cat,comp:p.sheet?`Capacidad ${p.sheet[dz.color].cap} · Acero inoxidable`:p.specs?`${p.specs.mat} · Capacidad ${p.specs.cap} · ${p.specs.prop}`:p.comp,color:dz.color,tech:dz.tech,place:(p.cat==="drinkware"?`${ORI_N[dz.orient]} · ${POS_N[dz.pos]} · `:p.views?`${VIEW_N[dz.view]} · `:"")+`Tamaño ${dz.scale}%`,pcs,logos:fbxLogosPara(p.id,dz.tech),file:dz.fileName,img:await thumb(dz.result)});
+  cart.push({id:Date.now(),pid:p.id,name:p.sheet?p.sheet[dz.color].name:p.apparel?`${p.name} · Talla ${fbxTallaDe(p,p.id,dz.color)}`:p.name,sku:fbxSku(p,dz.color,p.id),cat:p.cat,comp:p.sheet?`Capacidad ${p.sheet[dz.color].cap} · Acero inoxidable`:p.specs?`${p.specs.mat} · Capacidad ${p.specs.cap} · ${p.specs.prop}`:p.comp,color:dz.color,tech:dz.tech,place:(p.cat==="drinkware"?`${ORI_N[dz.orient]} · ${POS_N[dz.pos]} · `:p.views?`${VIEW_N[dz.view]} · `:"")+`Tamaño ${dz.scale}%`,pcs,logos:fbxLogosPara(p.id,dz.tech),file:dz.fileName,img:await thumb(dz.result)});
   saveCart();toast(`${p.name} agregado al carrito`);go("carrito");
 });
 function renderCart(){
   const box=document.getElementById("citems");
   if(!cart.length){box.innerHTML=`<div class="empty">Tu carrito está vacío.<br><br><button class="btn" data-go="disena">Diseña tu producto</button></div>`;}
   else box.innerHTML=cart.map(it=>`<article class="citem">
-    <img src="${it.img}" alt="${it.name} en ${COLORS[it.color].n} con tu logo">
+    <img src="${it.img}" alt="${it.name} en ${(COLORS[it.color]||{n:it.color}).n} con tu logo">
     <div style="min-width:0"><div class="sku">SKU: ${it.sku}</div><h3>${it.name}</h3>
       <p>${it.comp}</p>
-      <div class="meta"><span class="pill"><span class="dot" style="background:${(COLORS[it.color]||{}).h}"></span>${COLORS[it.color].n}</span><span class="pill">${TECH_NAME[it.tech]||it.tech}</span>${precioPill(it)}${it.place?`<span class="pill">Logo: ${it.place}</span>`:""}<span class="pill" title="${it.file}">Archivo: ${it.file.length>22?it.file.slice(0,20)+"…":it.file}</span></div></div>
+      <div class="meta"><span class="pill"><span class="dot" style="background:${(COLORS[it.color]||{}).h}"></span>${(COLORS[it.color]||{n:it.color}).n}</span><span class="pill">${fbxTecNombre(it.tech,1,it.cat)}</span>${precioPill(it)}${it.place?`<span class="pill">Logo: ${it.place}</span>`:""}<span class="pill" title="${it.file}">Archivo: ${it.file.length>22?it.file.slice(0,20)+"…":it.file}</span></div></div>
     <div class="cqty"><div class="qty"><button type="button" data-cq="${it.id}:-1" aria-label="Menos">−</button><input type="number" min="1" value="${it.pcs}" data-ci="${it.id}" aria-label="Piezas"><button type="button" data-cq="${it.id}:1" aria-label="Más">+</button></div>
       <span style="font-size:12.5px;color:var(--muted)">piezas</span><button class="rm" data-rm="${it.id}">Quitar</button></div>
   </article>`).join("");
   document.getElementById("sumItems").textContent=cart.length;
   const totPcs=cart.reduce((a,b)=>a+b.pcs,0);document.getElementById("sumPcs").textContent=totPcs.toLocaleString("es-MX");
   const mn=document.getElementById("minNote");mn.classList.toggle("warn",cart.length>0&&totPcs<25);
-  mn.textContent=cart.length&&totPcs<25?`Te faltan ${25-totPcs} piezas para el mínimo de compra (25 piezas). Puedes combinar colores y modelos.`:"Mínimo de compra: 25 piezas por pedido. Puedes combinar colores y modelos.";
-  const lines=cart.map((it,i)=>`${i+1}) ${it.name} (SKU ${it.sku}) · ${COLORS[it.color].n} · ${TECH_NAME[it.tech]}${it.place?` (logo ${it.place.toLowerCase()})`:""} · ${it.pcs} pzs · Archivo: ${it.file}`);
+  mn.textContent=cart.length&&totPcs<25?`Te faltan ${25-totPcs} piezas para obtener grabado y envío gratis. Puedes combinar colores y modelos.`:cart.length?"¡Listo! Tu pedido ya tiene grabado y envío gratis.":"Grabado y envío gratis a partir de 25 piezas. Puedes combinar colores y modelos.";
+  const lines=cart.map((it,i)=>`${i+1}) ${it.name} (SKU ${it.sku}) · ${(COLORS[it.color]||{n:it.color}).n} · ${TECH_NAME[it.tech]}${it.place?` (logo ${it.place.toLowerCase()})`:""} · ${it.pcs} pzs · Archivo: ${it.file}`);
   const msg=cart.length?`Hola, me gustaría cotizar este pedido de FB Custom:\n${lines.join("\n")}\nTotal: ${cart.reduce((a,b)=>a+b.pcs,0)} piezas.`:"Hola, me gustaría recibir asesoría para un pedido de FB Custom.";
   document.getElementById("waBtn").href=`https://wa.me/${WHATSAPP}?text=${encodeURIComponent(msg)}`;
   fbxActualizarResumen();
