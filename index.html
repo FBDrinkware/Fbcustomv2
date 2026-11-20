@@ -983,6 +983,7 @@ const FBX = {
   asesor: { codigo: 'FBDE-0', nombre: 'FB Drinkware', canal: 'FB Drinkware' },
   externo: false,
   hojaCargada: false,
+  cargando: true,  // mientras llegan los datos del Sheet no se muestran los productos de muestra del código
   respaldo: {},  // URL de foto del Sheet → foto del sitio, por si la URL no carga
 };
 const FBX_CODIGO_CATS = new Set(['gorras', 'playeras']); // categorías que siguen definidas en el código
@@ -1106,23 +1107,39 @@ function fbxActualizarResumen() {
 }
 
 /* ---------- carga: asesor, configuración (promos, categorías, colores) ---------- */
+/* ---------- memoria local: la última copia de los datos se muestra al instante y luego se actualiza ---------- */
+const fbxLeer = k => { try { return localStorage.getItem(k); } catch (_) { return null; } };
+const fbxGuardar = (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} };
+const fbxCodAsesor = () => (fbxParam('asesor') || 'FBDE-0').trim();
+
+function fbxAplicarAsesor(a) {
+  FBX.asesor = a;
+  WHATSAPP = a.telefono || FBX.WA_DEFAULT;
+  FBX.externo = a.canal === 'Externo';
+}
 async function fbxCargarAsesor() {
-  const cod = (fbxParam('asesor') || 'FBDE-0').trim();
+  const cod = fbxCodAsesor();
   WHATSAPP = FBX.WA_DEFAULT;
   if (cod.toUpperCase() === 'FBDE-0') return;
   try {
     const d = await (await fetch(`${FBX.APPS_SCRIPT_URL}?action=getAsesor&codigo=${encodeURIComponent(cod)}`)).json();
     if (!d.ok || !d.asesor) return;
-    FBX.asesor = d.asesor;
-    WHATSAPP = d.asesor.telefono || FBX.WA_DEFAULT;
-    FBX.externo = d.asesor.canal === 'Externo';
+    fbxAplicarAsesor(d.asesor);
+    fbxGuardar('fbx_as_' + cod.toUpperCase(), JSON.stringify(d.asesor));
   } catch (e) { console.warn('getAsesor falló, se usa FB Drinkware', e); }
 }
 
 async function fbxCargarConfig() {
   try {
     const d = await (await fetch(`${FBX.APPS_SCRIPT_URL}?action=getConfigCatalogo`)).json();
-    if (!d.ok) return;
+    if (!d.ok) return false;
+    fbxAplicarConfig(d);
+    fbxGuardar('fbx_cfg', JSON.stringify(d));
+    return true;
+  } catch (e) { console.warn('getConfigCatalogo falló', e); return false; }
+}
+function fbxAplicarConfig(d) {
+  {
     FBX.promos = {};
     (d.promos || []).forEach(pr => { FBX.promos[pr.skuAplica === 'TODOS' ? '__TODOS__' : pr.skuAplica] = pr; });
     const g = Object.assign({}, d.guia || {}, d.config || {}), num = v => { const n = parseFloat(v); return isNaN(n) ? null : n; };
@@ -1139,7 +1156,7 @@ async function fbxCargarConfig() {
       COLORS[c.clave] = { n: c.nombre, h };
     });
     FBX.categorias = d.categorias || [];
-  } catch (e) { console.warn('getConfigCatalogo falló', e); }
+  }
 }
 
 /* Aplica la hoja Categorias: nombre, subtítulo, orden y estado (Activa / Próximamente / Oculta) */
@@ -1166,7 +1183,16 @@ async function fbxCargarProductos() {
   try {
     const r = await fetch(FBX.SHEET_URL);
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    const filas = fbxCSVRows(await r.text());
+    const txt = await r.text();
+    fbxProcesarCSV(txt);
+    fbxGuardar('fbx_csv', txt);
+    return true;
+  } catch (e) { console.warn('No se pudo leer el Sheet de productos', e); return false; }
+}
+function fbxProcesarCSV(txt) {
+  {
+    FBX.nombres = {}; FBX.precios = {}; FBX.estatus = {}; FBX.preciosAsesor = {};
+    const filas = fbxCSVRows(txt);
     const h = fbxCSVLine(filas[0] || '').map(x => fbxNorm(fbxCelda(x)).toUpperCase());
     const col = name => h.indexOf(name);
     const iColor = col('COLOR'), iHex = col('HEX'), iFam = col('FAMILIA'), iCat = col('CATEGORIA'), iLimpia = col('IMAGEN_LIMPIA');
@@ -1197,7 +1223,7 @@ async function fbxCargarProductos() {
     FBX.hojaCargada = true;
     fbxConstruirDesdeHoja(rows);
     fbxConstruirAparel(rows);
-  } catch (e) { console.warn('No se pudo leer el Sheet de productos; se usan los vasos del código', e); }
+  }
 }
 
 /* Arma las tarjetas de vasos (y de categorías nuevas) desde las filas del Sheet:
@@ -1636,26 +1662,45 @@ document.addEventListener('DOMContentLoaded', async () => {
   flot.innerHTML = waIcon.replace('width="18" height="18"', chico ? 'width="24" height="24"' : 'width="28" height="28"');
   flot.addEventListener('click', e => { e.preventDefault(); abrirWA(); });
   document.body.appendChild(flot);
+  // 1) Al instante: la última copia guardada (sin mostrar los productos de muestra del código)
+  try {
+    const a = fbxLeer('fbx_as_' + fbxCodAsesor().toUpperCase());
+    if (a && fbxCodAsesor().toUpperCase() !== 'FBDE-0') fbxAplicarAsesor(JSON.parse(a));
+    const c = fbxLeer('fbx_cfg'), v = fbxLeer('fbx_csv');
+    if (c && v) {
+      fbxAplicarConfig(JSON.parse(c)); fbxAplicarCategorias(); fbxProcesarCSV(v);
+      FBX.cargando = false;
+    }
+  } catch (e) { console.warn('Copia local inválida', e); }
+  fbxRefrescarVista();
+  // 2) Datos frescos del Sheet
   await fbxCargarAsesor();
-  if (FBX.externo && FBX.ponerModo) { document.getElementById('k-modo').hidden = true; FBX.ponerModo('rapida'); }
-  await fbxCargarConfig();
-  fbxAplicarCategorias();
-  await fbxCargarProductos();
+  const [okCfg, okCsv] = await Promise.all([fbxCargarConfig(), fbxCargarProductos()]);
+  if (okCfg) fbxAplicarCategorias();
+  if (okCfg && okCsv) fbxProcesarCSV(fbxLeer('fbx_csv') || '');   // reconstruye con las categorías ya aplicadas
+  FBX.cargando = false;   // si el Sheet no respondió y no hay copia, se muestran los productos del código
+  fbxRefrescarVista();
+});
+
+function fbxRefrescarVista() {
+  if (FBX.externo && FBX.ponerModo) { const m = document.getElementById('k-modo'); if (m) m.hidden = true; FBX.ponerModo('rapida'); }
   try { renderCatCards(); } catch (_) {}
   // Menú "Categorías" del encabezado: una opción por categoría activa (nombres de la hoja Categorias)
   const dd = document.getElementById('ddMenu');
-  const modoMenu = {};
-  (FBX.categorias || []).forEach(c => { modoMenu[c.clave] = fbxNorm(c.menu).startsWith('modelo') ? 'modelos' : 'categoria'; });
-  if (dd) dd.innerHTML = Object.entries(CATS).filter(([k]) => !SOON.has(k) && PRODUCTS.some(p => p.cat === k))
-    .map(([k, c]) => {
-      if (modoMenu[k] !== 'modelos') return `<button role="menuitem" data-ddcat="${k}"><b>${c.n}</b></button>`;
-      const lineas = [...new Set(PRODUCTS.filter(p => p.cat === k).map(p => p.linea || p.name))];
-      return lineas.map(l => `<button role="menuitem" data-fbxline="${k}|${l}"><b>${l}</b></button>`).join('');
-    }).join('');
-  try { if (dd && dd.innerHTML.trim()) localStorage.setItem('fbx_menu', dd.innerHTML); } catch (_) {}
+  if (!FBX.cargando && dd) {
+    const modoMenu = {};
+    (FBX.categorias || []).forEach(c => { modoMenu[c.clave] = fbxNorm(c.menu).startsWith('modelo') ? 'modelos' : 'categoria'; });
+    dd.innerHTML = Object.entries(CATS).filter(([k]) => !SOON.has(k) && PRODUCTS.some(p => p.cat === k))
+      .map(([k, c]) => {
+        if (modoMenu[k] !== 'modelos') return `<button role="menuitem" data-ddcat="${k}"><b>${c.n}</b></button>`;
+        const lineas = [...new Set(PRODUCTS.filter(p => p.cat === k).map(p => p.linea || p.name))];
+        return lineas.map(l => `<button role="menuitem" data-fbxline="${k}|${l}"><b>${l}</b></button>`).join('');
+      }).join('');
+    if (dd.innerHTML.trim()) fbxGuardar('fbx_menu', dd.innerHTML);
+  }
   try { renderFilters(); renderGrid(); } catch (_) {}
   try { renderCart(); } catch (_) {}
-});
+}
 
 </script>
 <script>
@@ -1766,6 +1811,7 @@ function matches(p){
   return true;
 }
 function renderGrid(){
+  if(typeof FBX!=="undefined"&&FBX.cargando){document.getElementById("grid").innerHTML=`<div class="empty" style="grid-column:1/-1">Cargando productos…</div>`;document.getElementById("count").textContent="";return;}
   let list=PRODUCTS.filter(matches);
   if(state.sort==="new")list.sort((a,b)=>b.date-a.date);
   if(state.sort==="az")list.sort((a,b)=>a.name.localeCompare(b.name,"es"));
