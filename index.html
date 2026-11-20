@@ -510,6 +510,7 @@ footer .copy{display:flex;flex-direction:column;gap:4px;align-items:center}
 
 .menu button.lnk{text-align:center;justify-content:center;align-items:center;line-height:1.2}
 @media (min-width:861px){.menu{align-items:center}}
+@media (max-width:860px){.nav-in{grid-template-columns:auto 1fr}.nav-in .right{justify-content:flex-end}}
 @media (max-width:860px){.menu .lnk,.menu .dd{width:100%}}
 
 /* ===== Ubicación del logo (vasos) ===== */
@@ -567,9 +568,7 @@ footer .copy{display:flex;flex-direction:column;gap:4px;align-items:center}
       <div class="dd" id="dd">
         <button class="lnk dd-btn" id="ddBtn" data-key="productos" aria-haspopup="true" aria-expanded="false" aria-controls="ddMenu">Categorías <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m6 9 6 6 6-6"/></svg></button>
         <div class="dd-menu" id="ddMenu" role="menu">
-          <button role="menuitem" data-only="p2"><b>Polo Golf Premium</b></button>
-          <button role="menuitem" data-only="p1"><b>Polo Work Performance</b></button>
-          <button role="menuitem" data-ddcat="drinkware"><b>Vasos</b></button>
+
         </div>
       </div>
       <button class="lnk" data-go="disena">Diséñalo</button>
@@ -984,6 +983,7 @@ const FBX = {
   asesor: { codigo: 'FBDE-0', nombre: 'FB Drinkware', canal: 'FB Drinkware' },
   externo: false,
   hojaCargada: false,
+  respaldo: {},  // URL de foto del Sheet → foto del sitio, por si la URL no carga
 };
 const FBX_CODIGO_CATS = new Set(['gorras', 'playeras']); // categorías que siguen definidas en el código
 
@@ -1239,7 +1239,9 @@ function fbxConstruirDesdeHoja(rows) {
       };
       if (!COLORS[COLORS[code].fam]) COLORS[COLORS[code].fam] = { n: titleCase(COLORS[code].fam), h: hx[0] || '#BFC3C9' };
       // Tarjeta: la foto de la columna D del Sheet manda; si está vacía, la del sitio (img/vasos/<SKU>.webp)
-      IMGS[key][code] = x.img || IMGS[key][code] || `img/vasos/${code}.webp`;
+      const local = IMGS[key][code] || `img/vasos/${code}.webp`;
+      if (x.img) FBX.respaldo[x.img] = local;
+      IMGS[key][code] = x.img || local;
       // Diseñador: foto limpia calibrada del sitio; IMAGEN_LIMPIA solo para SKUs que no la tienen
       CLEAN[key][code] = CLEAN[key][code] || x.limpia || `img/vasos-limpias/${code}.webp`;
       const cap = x.cap ? x.cap.replace(/Oz/g, 'oz') : (g.oz ? `${g.oz} oz` : '');
@@ -1328,7 +1330,9 @@ function fbxConstruirAparel(rows) {
           COLORS[ck] = { n: titleCase(x.color), h: hx.length > 1 ? `linear-gradient(135deg,${hx[0]},${hx[1]})` : (hx[0] || ref.h || '#BFC3C9'), fam };
           if (!COLORS[fam]) COLORS[fam] = { n: titleCase(fam), h: COLORS[ck].h };
           const bi = IMGS[base] || {}, bc = CLEAN[base] || {};
-          IMGS[key][ck] = x.img || bi[cs] || bi[fam] || Object.values(bi)[0] || '';
+          const local = bi[cs] || bi[fam] || Object.values(bi)[0] || '';
+          if (x.img && local) FBX.respaldo[x.img] = local;
+          IMGS[key][ck] = x.img || local;
           CLEAN[key][ck] = bc[cs] || bc[fam] || Object.values(bc)[0] || x.img || '';
         }
         vars[ck][x.talla] = x.sku;
@@ -1338,7 +1342,7 @@ function fbxConstruirAparel(rows) {
       let p = PRODUCTS.find(q => q.id === key);
       if (!p) { p = { id: key, cat, type: key, apparel: true, date: 50 }; PRODUCTS.push(p); }
       Object.assign(p, {
-        name: g.modelo, linea: g.modelo.replace(/\s+(Hombre|Mujer)$/i, ''), colors, vars, agotado,
+        name: g.modelo, linea: g.modelo.replace(/\s+(Hombres?|Mujer(es)?|Caballeros?|Damas?|Unisex)$/i, ''), colors, vars, agotado,
         tallas: [...new Set(g.filas.map(x => x.talla))].sort((a, b) => orden(a) - orden(b)),
         comp: g.filas.find(x => x.comp)?.comp || '',
         sku: g.filas[0].sku,
@@ -1568,7 +1572,30 @@ function fbxEnviar(e) {
 }
 
 /* ---------- eventos y arranque ---------- */
+// Si una foto del Sheet no carga (URL equivocada o bloqueada por la red), se muestra la del sitio
+document.addEventListener('error', e => {
+  const img = e.target;
+  if (!img || img.tagName !== 'IMG') return;
+  const alt = FBX.respaldo[img.getAttribute('src')];
+  if (alt && img.getAttribute('src') !== alt) { console.warn('Foto del Sheet no cargó, se usa la del sitio:', img.getAttribute('src')); img.src = alt; }
+}, true);
+
 document.addEventListener('DOMContentLoaded', async () => {
+  // Menú de Categorías: el último que se armó desde el Sheet (o las categorías del código) desde el primer instante
+  const ddInicial = document.getElementById('ddMenu');
+  if (ddInicial) {
+    let guardado = '';
+    try { guardado = localStorage.getItem('fbx_menu') || ''; } catch (_) {}
+    ddInicial.innerHTML = guardado || Object.entries(CATS).filter(([k]) => !SOON.has(k))
+      .map(([k, c]) => `<button role="menuitem" data-ddcat="${k}"><b>${c.n}</b></button>`).join('');
+  }
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-fbxline]'); if (!b) return;
+    const i = b.dataset.fbxline.indexOf('|'), cat = b.dataset.fbxline.slice(0, i), linea = b.dataset.fbxline.slice(i + 1);
+    state.only = null; state.cats = new Set([cat]); state.colors.clear();
+    state.q = linea; smart.value = linea;
+    closeDD(); go('catalogo');
+  });
   fbxCampos();
   const wa = document.getElementById('waBtn');
   if (wa) wa.addEventListener('click', fbxEnviar);
@@ -1604,8 +1631,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   const flot = document.createElement('a');
   flot.href = '#'; flot.setAttribute('aria-label', 'Escríbenos por WhatsApp'); flot.title = 'Escríbenos por WhatsApp';
-  flot.style.cssText = 'position:fixed;right:calc(18px + env(safe-area-inset-right,0px));bottom:calc(18px + env(safe-area-inset-bottom,0px));width:56px;height:56px;border-radius:50%;background:#25D366;color:#fff;display:grid;place-items:center;box-shadow:0 4px 14px rgba(0,0,0,.22);z-index:60';
-  flot.innerHTML = waIcon.replace('width="18" height="18"', 'width="28" height="28"');
+  const chico = window.matchMedia('(max-width:700px)').matches;
+  flot.style.cssText = `position:fixed;right:calc(${chico ? 12 : 18}px + env(safe-area-inset-right,0px));bottom:calc(${chico ? 12 : 18}px + env(safe-area-inset-bottom,0px));width:${chico ? 46 : 56}px;height:${chico ? 46 : 56}px;border-radius:50%;background:#25D366;color:#fff;display:grid;place-items:center;box-shadow:0 4px 14px rgba(0,0,0,.22);z-index:60`;
+  flot.innerHTML = waIcon.replace('width="18" height="18"', chico ? 'width="24" height="24"' : 'width="28" height="28"');
   flot.addEventListener('click', e => { e.preventDefault(); abrirWA(); });
   document.body.appendChild(flot);
   await fbxCargarAsesor();
@@ -1624,13 +1652,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const lineas = [...new Set(PRODUCTS.filter(p => p.cat === k).map(p => p.linea || p.name))];
       return lineas.map(l => `<button role="menuitem" data-fbxline="${k}|${l}"><b>${l}</b></button>`).join('');
     }).join('');
-  document.addEventListener('click', e => {
-    const b = e.target.closest('[data-fbxline]'); if (!b) return;
-    const i = b.dataset.fbxline.indexOf('|'), cat = b.dataset.fbxline.slice(0, i), linea = b.dataset.fbxline.slice(i + 1);
-    state.only = null; state.cats = new Set([cat]); state.colors.clear();
-    state.q = linea; smart.value = linea;
-    closeDD(); go('catalogo');
-  });
+  try { if (dd && dd.innerHTML.trim()) localStorage.setItem('fbx_menu', dd.innerHTML); } catch (_) {}
   try { renderFilters(); renderGrid(); } catch (_) {}
   try { renderCart(); } catch (_) {}
 });
